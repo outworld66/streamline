@@ -122,8 +122,9 @@ func movieListToAPI(m *ent.Movie, sum db.MovieFileSummary) Movie {
 		return out
 	}
 	fs := MovieFileSummary{
-		FileCount: sum.FileCount,
-		SizeBytes: sum.SizeBytes,
+		FileCount:  sum.FileCount,
+		SizeBytes:  sum.SizeBytes,
+		ImportedAt: sum.ImportedAt,
 	}
 	// Resolution and codec are parsed from the filename, not stored, so the
 	// rollup parses once for the primary file rather than once per file.
@@ -787,7 +788,7 @@ func toHistoryEntry(r *ent.DownloadRecord) HistoryEntry {
 	if r.Edges.Movie != nil {
 		out.Movie = movieToAPI(r.Edges.Movie)
 	}
-	out.Episode = episodeRef(r.Edges.Episode)
+	out.Episode = episodeRef(r.Edges.AnchorEpisode)
 	if r.Quality != "" {
 		out.Quality = &r.Quality
 	}
@@ -847,8 +848,8 @@ func toPendingItem(r *ent.DownloadRecord) PendingItem {
 			Title: m.Title,
 			Year:  &y,
 		}
-	case r.Edges.Episode != nil:
-		ep := r.Edges.Episode
+	case r.Edges.AnchorEpisode != nil:
+		ep := r.Edges.AnchorEpisode
 		item.HasFile = len(ep.Edges.MediaFiles) > 0
 		epNum := ep.Number
 		media := &PendingMedia{

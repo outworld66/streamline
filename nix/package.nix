@@ -66,7 +66,7 @@ let
     pnpmDeps = fetchPnpmDeps {
       inherit (finalAttrs) pname version src;
       fetcherVersion = 4;
-      hash = "sha256-qcN6b+2ewk4GTLYFW3Vc3nEhXJphvVOww7bt/SS1Dwk=";
+      hash = "sha256-Zc4+pYnkJycBKAZFvpwwstu3KTHaVwrfh7S+x83KZjs=";
     };
 
     # Mirrors `task build:js` + `task build:css`. Keep the two in step: the Go
@@ -108,7 +108,7 @@ in
   pname = "streamline";
   inherit version src;
 
-  vendorHash = "sha256-ivY+UgCqGsWAIz2BMCpefZSnLSvYiFS3PSH3k95JcFw=";
+  vendorHash = "sha256-+FD/bRdnD67FshTDTQXeRDnQHTiupEVdw/clXf5xwoE=";
 
   subPackages = [ "cmd" ];
 

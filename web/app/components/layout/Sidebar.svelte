@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { roleLabel } from "@lib/roles";
 	import { onMount } from "svelte";
 	import {
 		LayoutDashboard,
@@ -93,7 +94,7 @@
 	];
 	let opsItems = $derived([
 		...(auth.isAdmin
-			? [{ label: i18n.imports_label(), href: "/library/imports", icon: FolderInput }]
+			? [{ label: i18n.imports_label(), href: "/imports", icon: FolderInput }]
 			: []),
 		{ label: i18n.common_calendar(), href: "/calendar", icon: CalendarDays },
 		{ label: i18n.requests_label(), href: "/requests", icon: Inbox },
@@ -107,10 +108,10 @@
 		{ label: i18n.activity_queue_history(), href: "/activity", icon: ListVideo },
 		...(auth.isAdmin
 			? [
-					{ label: i18n.torrent_label(), href: "/activity/torrents", icon: Magnet },
+					{ label: i18n.torrent_label(), href: "/torrents", icon: Magnet },
 					{
 						label: i18n.transcode_label(),
-						href: "/activity/transcoding",
+						href: "/transcoding",
 						icon: Replace,
 					},
 				]
@@ -187,12 +188,7 @@
 		].filter((p) => p.count > 0),
 	);
 
-	let roleLabel = $derived.by(() => {
-		const r = auth.user?.role;
-		if (r === "admin") return "admin";
-		if (r === "request_only") return "request";
-		return "member";
-	});
+	let role = $derived(roleLabel(auth.user?.role ?? "member"));
 
 	async function signOut() {
 		try {
@@ -337,10 +333,10 @@
 							{/if}
 							{@render dotPills(queuePills)}
 						{/if}
-						{#if link.href === "/activity/torrents"}
+						{#if link.href === "/torrents"}
 							{@render dotPills(torrentPills)}
 						{/if}
-						{#if link.href === "/activity/transcoding"}
+						{#if link.href === "/transcoding"}
 							{@render dotPills(transcodePills)}
 						{/if}
 					</a>
@@ -356,7 +352,7 @@
 					>
 						<item.icon size={18} class="shrink-0" />
 						<span class="flex-1 truncate">{item.label}</span>
-						{#if item.href === "/library/imports"}
+						{#if item.href === "/imports"}
 							{@render dotPills(importPills)}
 						{/if}
 						{#if item.href === "/requests" && pendingRequests > 0}
@@ -408,7 +404,7 @@
 							{auth.user.display_name || auth.user.email}
 						</div>
 						<div class="mt-px truncate font-mono text-[10px] text-fg-faint">
-							{roleLabel}{version ? ` · ${version}` : ""}
+							{role}{version ? ` · ${version}` : ""}
 						</div>
 					</div>
 				</a>

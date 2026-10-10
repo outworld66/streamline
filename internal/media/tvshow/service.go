@@ -18,6 +18,7 @@ import (
 	"github.com/datahearth/streamline/internal/events"
 	"github.com/datahearth/streamline/internal/indexer"
 	"github.com/datahearth/streamline/internal/library"
+	"github.com/datahearth/streamline/internal/mediaserver"
 	"github.com/datahearth/streamline/internal/metadata"
 	"github.com/datahearth/streamline/internal/otelx"
 	"github.com/datahearth/streamline/internal/posters"
@@ -78,6 +79,7 @@ type Service struct {
 	metadata metadata.TVProvider
 	posters  posters.Manager
 	download download.Downloader
+	ms       mediaserver.Refresher
 }
 
 func NewService(
@@ -85,8 +87,9 @@ func NewService(
 	meta metadata.TVProvider,
 	p posters.Manager,
 	dl download.Downloader,
+	ms mediaserver.Refresher,
 ) *Service {
-	return &Service{db: store, metadata: meta, posters: p, download: dl}
+	return &Service{db: store, metadata: meta, posters: p, download: dl, ms: ms}
 }
 
 var _ Manager = (*Service)(nil)
@@ -661,6 +664,9 @@ func (s *Service) Delete(ctx context.Context, id uint32, opts DeleteOptions) err
 			attribute.Int("files.requested", requested),
 			attribute.Int("files.kept", kept),
 		)
+		if requested > 0 {
+			mediaserver.RefreshInBackground(ctx, s.ms, "series", root)
+		}
 	}
 	if err := s.db.DeleteTVShow(ctx, id); err != nil {
 		if ent.IsNotFound(err) {
@@ -717,9 +723,8 @@ func (s *Service) DeleteEpisodeFile(
 		}
 		return otelx.RecordSpanError(span, fmt.Errorf("find media_file: %w", err))
 	}
-	if err := library.RemoveMediaFile(ctx,
-		mf.Path, config.Get().Library.SeriesPath,
-	); err != nil {
+	root := config.Get().Library.SeriesPath
+	if err := library.RemoveMediaFile(ctx, mf.Path, root); err != nil {
 		// See movie.DeleteFile: a file outside the root is refused, row kept.
 		if errors.Is(err, library.ErrOutsideRoot) {
 			return otelx.RecordSpanError(span, err)
@@ -727,6 +732,7 @@ func (s *Service) DeleteEpisodeFile(
 		slog.WarnContext(ctx, "delete episode file from disk failed",
 			"path", mf.Path, "error", err)
 	}
+	mediaserver.RefreshInBackground(ctx, s.ms, "series", root)
 	if err := s.db.DeleteMediaFileAndRevertEpisode(
 		ctx, mf.ID, episodeID,
 	); err != nil {
@@ -764,7 +770,7 @@ func (s *Service) removeEpisodeSourceTorrent(ctx context.Context, episodeID uint
 }
 
 // GrabSeasonRelease dispatches a chosen season-pack release against the season's
-// first episode and flips every wanted, aired episode in the season to
+// first wanted episode and flips every wanted, aired episode in the season to
 // "downloading" so the whole season reflects the grab immediately. Season-pack
 // reconciliation maps the pack's files back to episodes on import.
 func (s *Service) GrabSeasonRelease(
@@ -801,7 +807,7 @@ func (s *Service) GrabSeasonRelease(
 }
 
 // GrabSeriesRelease dispatches a chosen whole-series (integral / multi-season)
-// release against the first episode of the series and flips every wanted, aired
+// release against the first wanted episode of the series and flips every wanted, aired
 // episode across all seasons to "downloading".
 func (s *Service) GrabSeriesRelease(
 	ctx context.Context,
@@ -849,10 +855,11 @@ func wantedAiredEpisodes(eps []*ent.Episode, now time.Time) []*ent.Episode {
 	return wanted
 }
 
-// grabPackAndMark grabs one multi-episode release linked to the first episode
-// and flips every wanted, aired episode in the set to "downloading". Anchoring
-// the download record to a single episode matches the automatic season-pack
-// path; import reconciliation maps the pack's files to the rest. Future-unaired
+// grabPackAndMark grabs one multi-episode release anchored on the first
+// episode it is wanted for and flips every wanted, aired episode in the set to
+// "downloading". Anchoring the download record to a single episode matches the
+// automatic season-pack path; import reconciliation maps the pack's files to
+// the rest. Future-unaired
 // episodes stay wanted since the pack can't contain them.
 func (s *Service) grabPackAndMark(
 	ctx context.Context,
@@ -877,7 +884,13 @@ func (s *Service) grabPackAndMark(
 	for i, e := range wanted {
 		wantedIDs[i] = e.ID
 	}
-	rec, err := s.download.GrabEpisode(ctx, result, eps[0].ID, wantedIDs)
+	// The anchor is linked like any wanted episode, so one already on disk
+	// would put its file back in the pack's selection.
+	anchor := eps[0]
+	if len(wanted) > 0 {
+		anchor = wanted[0]
+	}
+	rec, err := s.download.GrabEpisode(ctx, result, anchor.ID, wantedIDs)
 	if err != nil {
 		return otelx.RecordSpanError(span, fmt.Errorf("grab pack: %w", err))
 	}

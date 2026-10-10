@@ -45,6 +45,15 @@ var downloadSpans = func() *tracetest.SpanRecorder {
 	return rec
 }()
 
+// linked builds the episodes edge of a record that links ids.
+func linked(ids ...uint32) []*ent.Episode {
+	eps := make([]*ent.Episode, len(ids))
+	for i, id := range ids {
+		eps[i] = &ent.Episode{ID: id}
+	}
+	return eps
+}
+
 func endedSpan(rec *tracetest.SpanRecorder, name string) sdktrace.ReadOnlySpan {
 	GinkgoHelper()
 
@@ -523,10 +532,12 @@ var _ = Describe("Manager", Label("unit", "downloads"), func() {
 	})
 
 	Describe("PurgeOldRecords", func() {
+		BeforeEach(func() { configtest.Setup() })
+
 		It("returns nil when both deletes succeed with zero rows", func() {
 			cleaner := mgr.(Cleaner)
 			store.EXPECT().DeleteCompletedDownloadRecordsBefore(
-				mock.Anything, mock.AnythingOfType("time.Time"),
+				mock.Anything, mock.AnythingOfType("time.Time"), []string(nil),
 			).Return(0, nil).Once()
 			store.EXPECT().DeleteFailedDownloadRecordsBefore(
 				mock.Anything, mock.AnythingOfType("time.Time"),
@@ -538,8 +549,8 @@ var _ = Describe("Manager", Label("unit", "downloads"), func() {
 			cleaner := mgr.(Cleaner)
 			var compCutoff, failCutoff time.Time
 			store.EXPECT().DeleteCompletedDownloadRecordsBefore(
-				mock.Anything, mock.AnythingOfType("time.Time"),
-			).Run(func(_ context.Context, c time.Time) { compCutoff = c }).
+				mock.Anything, mock.AnythingOfType("time.Time"), []string(nil),
+			).Run(func(_ context.Context, c time.Time, _ []string) { compCutoff = c }).
 				Return(2, nil).Once()
 			store.EXPECT().DeleteFailedDownloadRecordsBefore(
 				mock.Anything, mock.AnythingOfType("time.Time"),
@@ -558,7 +569,7 @@ var _ = Describe("Manager", Label("unit", "downloads"), func() {
 		It("joins errors when both deletes fail", func() {
 			cleaner := mgr.(Cleaner)
 			store.EXPECT().DeleteCompletedDownloadRecordsBefore(
-				mock.Anything, mock.Anything,
+				mock.Anything, mock.Anything, mock.Anything,
 			).Return(0, errors.New("comp")).Once()
 			store.EXPECT().DeleteFailedDownloadRecordsBefore(
 				mock.Anything, mock.Anything,
@@ -886,7 +897,7 @@ var _ = Describe("GrabEpisode selective files", Label("unit", "downloads"), func
 				func(p db.CreateDownloadRecordParams) bool {
 					return p.EpisodeID == 21 &&
 						p.SelectionState == downloadrecord.SelectionStateApplied &&
-						len(p.WantedEpisodes) == 1 && p.WantedEpisodes[0] == 21 &&
+						len(p.EpisodeIDs) == 1 && p.EpisodeIDs[0] == 21 &&
 						len(p.SelectedFiles) == 1 && p.SelectedFiles[0] == 0 &&
 						p.SelectedBytes == aboveFloor
 				},
@@ -966,7 +977,7 @@ var _ = Describe("GrabEpisode selective files", Label("unit", "downloads"), func
 			result, _ := twoEpisodeRelease(true)
 			store.EXPECT().CreateDownloadRecord(mock.Anything, mock.MatchedBy(
 				func(p db.CreateDownloadRecordParams) bool {
-					return len(p.WantedEpisodes) == 0 && p.SelectionState == ""
+					return len(p.EpisodeIDs) == 0 && p.SelectionState == ""
 				},
 			)).Return(&ent.DownloadRecord{ID: 42}, nil).Once()
 
@@ -1021,7 +1032,7 @@ var _ = Describe("GrabEpisode selective files", Label("unit", "downloads"), func
 				func(p db.CreateDownloadRecordParams) bool {
 					return p.EpisodeID == 21 &&
 						p.SelectionState == downloadrecord.SelectionStatePending &&
-						len(p.WantedEpisodes) == 1 && p.WantedEpisodes[0] == 21
+						len(p.EpisodeIDs) == 1 && p.EpisodeIDs[0] == 21
 				},
 			)).Return(&ent.DownloadRecord{ID: 43}, nil).Once()
 
@@ -1255,8 +1266,10 @@ var _ = Describe(
 					TorrentHash:        hash,
 					DownloadClientName: "embedded",
 					Status:             downloadrecord.StatusCompleted,
-					WantedEpisodes:     []uint32{21},
-					SelectionState:     downloadrecord.SelectionStateApplied,
+					Edges: ent.DownloadRecordEdges{
+						Episodes: linked(21),
+					},
+					SelectionState: downloadrecord.SelectionStateApplied,
 				}
 				client.listFilesResult = []TorrentFile{
 					{Index: 0, Path: "Show.S01E01.mkv", Size: aboveFloor},
@@ -1269,8 +1282,8 @@ var _ = Describe(
 					TVShowForEpisode(mock.Anything, uint32(22)).
 					Return(widenShow(), nil).Once()
 				store.EXPECT().
-					SetDownloadRecordWantedEpisodes(
-						mock.Anything, uint32(42), []uint32{21, 22},
+					AddDownloadRecordEpisodes(
+						mock.Anything, uint32(42), []uint32{22},
 					).
 					Return(nil).Once()
 				store.EXPECT().
@@ -1323,7 +1336,7 @@ var _ = Describe(
 
 				Expect(errors.Is(err, ErrTorrentAlreadyExists)).To(BeTrue())
 				Expect(client.addTorrentCalls).To(Equal(0))
-				// SetDownloadRecordWantedEpisodes carries no expectation above:
+				// AddDownloadRecordEpisodes carries no expectation above:
 				// calling it would panic the mock.
 			},
 		)
@@ -1338,8 +1351,10 @@ var _ = Describe(
 					TorrentHash:        hash,
 					DownloadClientName: "embedded",
 					Status:             downloadrecord.StatusDownloading,
-					WantedEpisodes:     []uint32{21},
-					SelectionState:     downloadrecord.SelectionStateUnsupported,
+					Edges: ent.DownloadRecordEdges{
+						Episodes: linked(21),
+					},
+					SelectionState: downloadrecord.SelectionStateUnsupported,
 				}
 				store.EXPECT().
 					FindWidenableDownloadRecordByHash(mock.Anything, hash).
@@ -1353,7 +1368,7 @@ var _ = Describe(
 				Expect(errors.Is(err, ErrTorrentAlreadyExists)).To(BeTrue())
 				Expect(client.addTorrentCalls).To(Equal(0))
 				Expect(client.listFilesCalls).To(Equal(0))
-				// SetDownloadRecordWantedEpisodes carries no expectation above:
+				// AddDownloadRecordEpisodes carries no expectation above:
 				// calling it would panic the mock.
 			},
 		)
@@ -1412,16 +1427,18 @@ var _ = Describe(
 					TorrentHash:        hash,
 					DownloadClientName: "embedded",
 					Status:             downloadrecord.StatusDownloading,
-					WantedEpisodes:     []uint32{21},
-					SelectionState:     downloadrecord.SelectionStatePending,
+					Edges: ent.DownloadRecordEdges{
+						Episodes: linked(21),
+					},
+					SelectionState: downloadrecord.SelectionStatePending,
 				}
 				client.listFilesResult = nil // metadata not yet resolved
 				store.EXPECT().
 					FindWidenableDownloadRecordByHash(mock.Anything, hash).
 					Return(live, nil).Once()
 				store.EXPECT().
-					SetDownloadRecordWantedEpisodes(
-						mock.Anything, uint32(42), []uint32{21, 22},
+					AddDownloadRecordEpisodes(
+						mock.Anything, uint32(42), []uint32{22},
 					).
 					Return(nil).Once()
 				store.EXPECT().
@@ -1458,8 +1475,10 @@ var _ = Describe(
 					TorrentHash:        hash,
 					DownloadClientName: "embedded",
 					Status:             downloadrecord.StatusDownloading,
-					WantedEpisodes:     []uint32{21},
-					SelectionState:     downloadrecord.SelectionStateApplied,
+					Edges: ent.DownloadRecordEdges{
+						Episodes: linked(21),
+					},
+					SelectionState: downloadrecord.SelectionStateApplied,
 				}
 				// A video file the show's own season/episode list has no
 				// counterpart for — matches neither 21 nor 22.
@@ -1480,7 +1499,7 @@ var _ = Describe(
 
 				Expect(errors.Is(err, ErrTorrentAlreadyExists)).To(BeTrue())
 				Expect(client.setWantedCalls).To(Equal(0))
-				// SetDownloadRecordWantedEpisodes/SetDownloadRecordSelection
+				// AddDownloadRecordEpisodes/SetDownloadRecordSelection
 				// carry no expectation above: calling either would panic the
 				// mock, so reaching here proves no DB write happened.
 			},
@@ -1524,8 +1543,10 @@ var _ = Describe(
 					TorrentHash:        hash,
 					DownloadClientName: "embedded",
 					Status:             downloadrecord.StatusCompleted,
-					WantedEpisodes:     []uint32{21},
-					SelectionState:     downloadrecord.SelectionStateApplied,
+					Edges: ent.DownloadRecordEdges{
+						Episodes: linked(21),
+					},
+					SelectionState: downloadrecord.SelectionStateApplied,
 				}
 				client.listFilesResult = []TorrentFile{
 					{Index: 0, Path: "Show.S02E01.mkv", Size: aboveFloor},
@@ -1538,8 +1559,8 @@ var _ = Describe(
 					TVShowForEpisode(mock.Anything, uint32(23)).
 					Return(liveShow, nil).Once()
 				store.EXPECT().
-					SetDownloadRecordWantedEpisodes(
-						mock.Anything, uint32(42), []uint32{21, 23, 24},
+					AddDownloadRecordEpisodes(
+						mock.Anything, uint32(42), []uint32{23, 24},
 					).
 					Return(nil).Once()
 				store.EXPECT().
@@ -1586,13 +1607,14 @@ type seedReapClient struct {
 	stubClient
 
 	torrents []Torrent
+	listErr  error
 	failHash string
 	removed  []string
 	deleted  []bool
 }
 
 func (c *seedReapClient) ListTorrents(context.Context) ([]Torrent, error) {
-	return c.torrents, nil
+	return c.torrents, c.listErr
 }
 
 func (c *seedReapClient) RemoveTorrent(
@@ -1721,6 +1743,59 @@ var _ = Describe(
 
 			Expect(mgr.RemoveSeedCompleteTorrents(ctx)).To(Succeed())
 			Expect(client.removed).To(Equal([]string{"h2"}))
+		})
+	},
+)
+
+var _ = Describe(
+	"PurgeOldRecords with a builtin client",
+	Label("unit", "downloads"),
+	func() {
+		var (
+			ctx    context.Context
+			store  *dbmocks.MockStore
+			client *seedReapClient
+			mgr    Cleaner
+		)
+
+		BeforeEach(func() {
+			ctx = context.Background()
+			store = dbmocks.NewMockStore(GinkgoT())
+			client = &seedReapClient{torrents: []Torrent{
+				{Hash: "h1", SeedingStopped: true},
+				{Hash: "h2"},
+			}}
+			configtest.Setup(map[string]any{
+				"download_clients": []map[string]any{{
+					"name": "embedded", "client_type": "builtin",
+					"download_dir": "/downloads", "enabled": true,
+				}},
+			})
+			mgr = New(store, client).(Cleaner)
+		})
+
+		It("keeps the records of every torrent the engine still holds", func() {
+			store.EXPECT().DeleteCompletedDownloadRecordsBefore(
+				mock.Anything, mock.AnythingOfType("time.Time"),
+				[]string{"h1", "h2"},
+			).Return(0, nil).Once()
+			store.EXPECT().DeleteFailedDownloadRecordsBefore(
+				mock.Anything, mock.AnythingOfType("time.Time"),
+			).Return(0, nil).Once()
+
+			Expect(mgr.PurgeOldRecords(ctx)).To(Succeed())
+		})
+
+		It("skips the completed purge when the engine cannot be listed", func() {
+			client.listErr = errors.New("engine boom")
+			// No completed-delete EXPECT: purging blind would drop the very
+			// records the seed reap needs. The mock fails the spec on a call.
+			store.EXPECT().DeleteFailedDownloadRecordsBefore(
+				mock.Anything, mock.AnythingOfType("time.Time"),
+			).Return(0, nil).Once()
+
+			Expect(mgr.PurgeOldRecords(ctx)).
+				To(MatchError(ContainSubstring("engine boom")))
 		})
 	},
 )

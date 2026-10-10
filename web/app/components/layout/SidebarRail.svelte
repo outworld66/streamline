@@ -28,6 +28,7 @@
 		TORRENT_PILLS,
 		torrentCountsQuery,
 		activityCurrent,
+		activityGroupActive,
 		type IsActiveFn,
 	} from "@lib/activity-nav";
 	import { navCountsQuery } from "@lib/nav-counts";
@@ -63,8 +64,8 @@
 			{ label: i18n.activity_queue_history(), href: "/activity", icon: ListVideo },
 			...(auth.isAdmin
 				? [
-						{ label: i18n.torrent_label(), href: "/activity/torrents", icon: Magnet },
-						{ label: i18n.transcode_label(), href: "/activity/transcoding", icon: Replace },
+						{ label: i18n.torrent_label(), href: "/torrents", icon: Magnet },
+						{ label: i18n.transcode_label(), href: "/transcoding", icon: Replace },
 					]
 				: []),
 		],
@@ -100,7 +101,7 @@
 	}
 
 	let libraryActive = $derived(["/movies", "/series"].some((p) => isActiveFn(p)));
-	let activityActive = $derived(isActiveFn("/activity"));
+	let activityActive = $derived(activityGroupActive(isActiveFn));
 	let dashActive = $derived(isActiveFn("/", {}, { recursive: false }));
 
 	// Dot badges ride the icon: the rail has no room for a number, but it can
@@ -118,7 +119,7 @@
 			? [
 					{
 						label: i18n.imports_label(),
-						href: "/library/imports",
+						href: "/imports",
 						icon: FolderInput,
 						dot: counts.importsDot,
 					},
@@ -172,21 +173,21 @@
 			<span>{i18n.nav_dashboard()}</span>
 		</a>
 
-		{#each [{ label: i18n.nav_library(), icon: Library, active: libraryActive }, { label: i18n.nav_activity(), icon: Activity, active: activityActive }] as group (group.label)}
-			{@const on = group.active || flyout === group.label}
+		{#each [{ key: "Library", label: i18n.nav_library(), icon: Library, active: libraryActive }, { key: "Activity", label: i18n.nav_activity(), icon: Activity, active: activityActive }] as group (group.key)}
+			{@const on = group.active || flyout === group.key}
 			<div class="relative flex justify-center">
 				<button
 					type="button"
-					onclick={() => (flyout = flyout === group.label ? "" : group.label)}
+					onclick={() => (flyout = flyout === group.key ? "" : group.key)}
 					aria-haspopup="menu"
-					aria-expanded={flyout === group.label}
+					aria-expanded={flyout === group.key}
 					class={cn(itemBase, on ? itemActive : itemInactive)}
 				>
 					<group.icon size={20} strokeWidth={on ? 2 : 1.6} />
 					<span>{group.label}</span>
 				</button>
 
-				{#if flyout === group.label}
+				{#if flyout === group.key}
 					<div
 						use:popover
 						role="menu"
@@ -198,16 +199,16 @@
 							class="flex items-center justify-between px-2.5 pb-1.5 pt-1 font-mono text-[9.5px] uppercase tracking-[0.16em] text-fg-faint"
 						>
 							<span>{group.label}</span>
-							{#if group.label === "Activity"}
+							{#if group.key === "Activity"}
 								<span class="flex items-center gap-1.5 tracking-[0.08em]">
 									<span class="h-[5px] w-[5px] rounded-full bg-status-available"></span>
-									live
+									{i18n.common_live()}
 								</span>
 							{/if}
 						</div>
-						{#each MENUS[group.label] ?? [] as link (link.href)}
+						{#each MENUS[group.key] ?? [] as link (link.href)}
 							{@const current =
-								group.label === "Activity"
+								group.key === "Activity"
 									? activityCurrent(isActiveFn, link.href)
 									: isActiveFn(link.href)}
 							<a
@@ -241,7 +242,7 @@
 									>
 										{counts.seriesTotal.toLocaleString()}
 									</span>
-								{:else if link.href === "/activity/torrents"}
+								{:else if link.href === "/torrents"}
 									<span
 										class="flex shrink-0 items-center gap-1.5 font-mono text-[10px] leading-none tabular-nums text-fg-subtle"
 									>

@@ -461,7 +461,7 @@ func baseQueueEntry(rec *ent.DownloadRecord) QueueEntry {
 		Quality:        rec.Quality,
 		ReleaseGroup:   rec.ReleaseGroup,
 		Movie:          rec.Edges.Movie,
-		Episode:        rec.Edges.Episode,
+		Episode:        rec.Edges.AnchorEpisode,
 		Size:           rec.Size,
 		FailureReason:  rec.FailureReason,
 		CreatedAt:      rec.CreateTime,
@@ -702,11 +702,11 @@ func (d *download) grab(
 			// selective resolution (pending/applied) with something new actually
 			// being asked for — every other combination (a plain whole-torrent
 			// grab, an unsupported/skipped client) is an ordinary duplicate hit.
-			// Gating on selection_state rather than "has WantedEpisodes" is what
+			// Gating on selection_state rather than "links any episodes" is what
 			// keeps a record whose client never resolved a selection (its state
 			// is skipped or unsupported) from reaching widenSelection at all;
-			// GrabEpisode writes WantedEpisodes unconditionally, so that field
-			// says nothing about whether a keep-set exists to widen.
+			// every episode record links its episodes, so that says nothing
+			// about whether a keep-set exists to widen.
 			if len(wantedEpisodes) > 0 &&
 				(live.SelectionState == downloadrecord.SelectionStatePending ||
 					live.SelectionState == downloadrecord.SelectionStateApplied) {
@@ -830,7 +830,7 @@ func (d *download) grab(
 		EpisodeID:          episodeID,
 		DownloadClientName: dc.Name,
 		IndexerName:        result.Indexer,
-		WantedEpisodes:     wantedEpisodes,
+		EpisodeIDs:         wantedEpisodes,
 	}
 	switch {
 	case selection != nil:
@@ -987,7 +987,7 @@ func (d *download) widenSelection(
 	)
 	defer span.End()
 
-	union, added := unionEpisodes(live.WantedEpisodes, wantedEpisodes)
+	union, added := unionEpisodes(db.RecordEpisodeIDs(live), wantedEpisodes)
 
 	dc, ok := config.FindDownloadClient(live.DownloadClientName)
 	if !ok {
@@ -1020,14 +1020,13 @@ func (d *download) widenSelection(
 	if len(clientFiles) == 0 {
 		// Metadata not yet available (e.g. a magnet still resolving) — the
 		// phase-4 pending-selection pass finishes the job once it is.
-		if err := d.db.SetDownloadRecordWantedEpisodes(
-			ctx, live.ID, union,
+		if err := d.db.AddDownloadRecordEpisodes(
+			ctx, live.ID, added,
 		); err != nil {
 			return nil, otelx.RecordSpanError(
-				span, fmt.Errorf("widen wanted episodes: %w", err),
+				span, fmt.Errorf("widen episodes: %w", err),
 			)
 		}
-		live.WantedEpisodes = union
 		if err := d.db.SetDownloadRecordSelection(
 			ctx, live.ID, downloadrecord.SelectionStatePending, nil, 0,
 		); err != nil {
@@ -1061,18 +1060,17 @@ func (d *download) widenSelection(
 		// commit nothing.
 		slog.WarnContext(ctx, "widen: keep-set matched no wanted episode",
 			"record.id", live.ID, "hash", live.TorrentHash,
-			"files", len(files), "wanted_episodes", union)
+			"files", len(files), "episodes", union)
 		return nil, otelx.RecordSpanError(span, ErrTorrentAlreadyExists)
 	}
 
-	if err := d.db.SetDownloadRecordWantedEpisodes(
-		ctx, live.ID, union,
+	if err := d.db.AddDownloadRecordEpisodes(
+		ctx, live.ID, added,
 	); err != nil {
 		return nil, otelx.RecordSpanError(
-			span, fmt.Errorf("widen wanted episodes: %w", err),
+			span, fmt.Errorf("widen episodes: %w", err),
 		)
 	}
-	live.WantedEpisodes = union
 
 	switch serr := client.SetWantedFiles(ctx, live.TorrentHash, keep); {
 	case errors.Is(serr, ErrNotSupported):
@@ -1097,8 +1095,8 @@ func (d *download) widenSelection(
 		live.SelectionState = downloadrecord.SelectionStateApplied
 	}
 
-	// added is the delta this grab contributed; the episodes already in
-	// live.WantedEpisodes were marked at their original grab. The guard
+	// added is the delta this grab contributed; the episodes the record
+	// already linked were marked at their original grab. The guard
 	// inside MarkEpisodeDownloading (moves only from "wanted") is what keeps
 	// this safe for a replace target already sitting at "available".
 	episodeSeasons := make(map[uint32]uint16)
@@ -1394,14 +1392,23 @@ func (d *download) ReconcileEpisodeStatuses(ctx context.Context) error {
 // PurgeOldRecords deletes completed records past completedRecordRetention and
 // failed records past failedRecordRetention. Both deletes run independently;
 // one failing does not block the other. Errors are joined.
+//
+// A completed record whose torrent the builtin engine still holds is kept
+// however old it is: it is RemoveSeedCompleteTorrents' only permission to
+// reap that torrent, and a seed_time at or past the retention window would
+// otherwise lose the record first and strand the files for good.
 func (d *download) PurgeOldRecords(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "download.purge_old_records")
 	defer span.End()
 
 	now := time.Now()
-	compN, compErr := d.db.DeleteCompletedDownloadRecordsBefore(
-		ctx, now.Add(-completedRecordRetention),
-	)
+	var compN int
+	keep, compErr := d.builtinTorrentHashes(ctx)
+	if compErr == nil {
+		compN, compErr = d.db.DeleteCompletedDownloadRecordsBefore(
+			ctx, now.Add(-completedRecordRetention), keep,
+		)
+	}
 	failN, failErr := d.db.DeleteFailedDownloadRecordsBefore(
 		ctx, now.Add(-failedRecordRetention),
 	)
@@ -1412,6 +1419,26 @@ func (d *download) PurgeOldRecords(ctx context.Context) error {
 			"completed", compN, "failed", failN)
 	}
 	return errors.Join(compErr, failErr)
+}
+
+func (d *download) builtinTorrentHashes(ctx context.Context) ([]string, error) {
+	dc, ok := config.BuiltinDownloadClient()
+	if !ok {
+		return nil, nil
+	}
+	client, err := d.buildClient(dc)
+	if err != nil {
+		return nil, fmt.Errorf("build builtin client: %w", err)
+	}
+	torrents, err := client.ListTorrents(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list builtin torrents: %w", err)
+	}
+	hashes := make([]string, len(torrents))
+	for i, t := range torrents {
+		hashes[i] = t.Hash
+	}
+	return hashes, nil
 }
 
 // PurgeOrphanedTorrents deletes "downloading" records whose torrent is no

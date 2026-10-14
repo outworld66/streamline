@@ -2,8 +2,17 @@ package indexer
 
 import (
 	"context"
+	"net/http"
 	"time"
+
+	"github.com/datahearth/streamline/internal/otelx"
 )
+
+func newIndexerHTTPClient() *http.Client {
+	client := *otelx.HTTPClient
+	client.Timeout = 60 * time.Second
+	return &client
+}
 
 type SearchResult struct {
 	Title       string

@@ -63,7 +63,7 @@ func NewTorznab(baseURL, apiKey string) *Torznab {
 	return &Torznab{
 		baseURL: baseURL,
 		apiKey:  apiKey,
-		client:  otelx.HTTPClient,
+		client:  newIndexerHTTPClient(),
 	}
 }
 

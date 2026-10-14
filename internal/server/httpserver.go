@@ -11,15 +11,14 @@ import (
 // delivers its body, or never drains its response must not pin a goroutine
 // and a socket indefinitely.
 //
-// writeTimeout has to clear the slowest synchronous handler: those chain
-// outbound calls that otelx.HTTPClient already caps at 30s each, so two
-// minutes leaves room for a short chain. The one streaming endpoint,
-// GET /api/v1/schedules/events, clears the deadline on its own connection
-// through http.ResponseController and is not bound by it.
+// writeTimeout has to clear the slowest synchronous handler: indexer calls
+// can take 60s each, so three minutes leaves room for a short chain. The one
+// streaming endpoint, GET /api/v1/schedules/events, clears the deadline on
+// its own connection through http.ResponseController and is not bound by it.
 const (
 	readHeaderTimeout = 10 * time.Second
 	readTimeout       = time.Minute
-	writeTimeout      = 2 * time.Minute
+	writeTimeout      = 3 * time.Minute
 	idleTimeout       = 2 * time.Minute
 )
 

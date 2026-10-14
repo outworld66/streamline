@@ -27,7 +27,7 @@ type Prowlarr struct {
 }
 
 func NewProwlarr(baseURL, apiKey string) *Prowlarr {
-	return &Prowlarr{baseURL: baseURL, apiKey: apiKey, client: otelx.HTTPClient}
+	return &Prowlarr{baseURL: baseURL, apiKey: apiKey, client: newIndexerHTTPClient()}
 }
 
 // prowlarrRelease is one entry of the /api/v1/search JSON array. Servarr

@@ -6,6 +6,11 @@
   autoPatchelfHook,
   installShellFiles,
   makeWrapper,
+  # fetchPnpmDeps overrides this on pnpm >= 11 to pin SQLite (nixpkgs:
+  # fetch-pnpm-deps). The fetched @pnpm/exe bundles its own Node, so the
+  # value only matters through the passthru: pnpm-fixup-state-db reads it
+  # back to run its script.
+  nodejs-slim ? null,
 }:
 # Same contract as nix/go.nix: package.json's packageManager decides the
 # version (renovate bumps it from the npm registry, together with CI's
@@ -97,7 +102,10 @@ else
     '';
 
     # fetchPnpmDeps reads `nodejs-slim` off the pnpm it is handed.
-    passthru = { inherit (pkg) majorVersion nodejs-slim; };
+    passthru = {
+      inherit (pkg) majorVersion;
+      nodejs-slim = if nodejs-slim == null then pkg.nodejs-slim else nodejs-slim;
+    };
 
     meta = pkg.meta // {
       sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];

@@ -2,7 +2,9 @@
   "go": {
     "1.27.2": "sha256-A0ldorpkiU1A9cSZLklFT6eLUGkGBP+Stq//UIG3bmI="
   },
-  "node": {},
+  "node": {
+    "24.21.0": "sha256-pvVN77b9fIT0HboT1h546bTglhcSz2HylxXAX1ztlPw="
+  },
   "pnpm": {
     "12.11.2": {
       "x86_64-linux": "sha512-FK7QKe24AYgppJwO3mpooYptduuvIGqKJPi5ac7MdnWkjUy46JBfYhCW0grnkWKC8YOf0x+vGviuQqJEj3SpQQ==",
